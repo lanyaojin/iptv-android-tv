@@ -3,6 +3,8 @@ package com.ying.iptv.data;
 import android.content.Context;
 import android.content.SharedPreferences;
 
+import com.ying.iptv.BuildConfig;
+
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -51,6 +53,11 @@ public class Prefs {
                 }
             } catch (JSONException ignored) {
             }
+        }
+        // 仅当构建时注入了默认源才预置；公开版本保持为空，由用户在设置里添加。
+        if (out.isEmpty() && !BuildConfig.DEFAULT_SOURCE_URL.isEmpty()) {
+            out.add(new Source("本地直播源", BuildConfig.DEFAULT_SOURCE_URL));
+            saveSources(out);
         }
         return out;
     }

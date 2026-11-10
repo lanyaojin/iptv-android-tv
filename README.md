@@ -2,7 +2,7 @@
 
 只做一件事：打开电视就是直播频道。基于公开版 media3/ExoPlayer 重写，不依赖任何私有 AAR，可独立编译。
 
-- 包名：`com.ying.iptv`　版本：`1.0.0 (1)`　minSdk 21 / targetSdk 34 / compileSdk 35
+- 包名：`com.ying.iptv`　版本：`1.0.1 (2)`　minSdk 21 / targetSdk 34 / compileSdk 35
 - 产物：`app/build/outputs/apk/release/app-release.apk`（纯 Java 实现，无 so，单个 APK 通吃 32/64 位）
 - 无预置源：首次启动进入引导页，在设置里填入你自己的 M3U/M3U8 直播源地址即可
 
@@ -11,7 +11,8 @@
 | 按键 | 作用 |
 |---|---|
 | 上下键 / 频道键 | 上一个 / 下一个频道 |
-| OK | 打开频道列表（列表内 OK 确认选中） |
+| OK | 打开频道列表（播放失败时改为重试当前频道；列表内 OK 确认选中） |
+| 右键 | 打开频道列表 |
 | 返回 | 关闭列表 → 再按两次退出应用 |
 | 菜单键 | 打开设置 |
 | 数字键 | 直接输入频道号（3 位内，1.2 秒后自动跳转） |
@@ -23,7 +24,9 @@
 - **打开即播**：记住上次频道；首次启动播第 1 个台。
 - **分组频道列表**：左侧分类（全部 / 我的收藏 / 各 `group-title` 分组），右侧 4 列频道卡片，带台标。
 - **容错解析**：支持 `tvg-id` / `tvg-name` / `tvg-logo` / `group-title` / `#EXTGRP`，频道名含逗号、BOM、GBK 编码、CRLF 均可解析；忽略 `#EXTVLCOPT`、`#KODIPROP`。
-- **断流重连**：播放错误自动重试 3 次（1.2s / 2.4s / 3.6s 退避），仍失败才提示换台。
+- **断流重连**：连接超时/5xx/403 等可恢复错误自动重试 3 次（0.8s / 1.6s / 2.4s 退避）；HTTP 400/401/404/410、内容不是视频流等确定性错误立即提示，不空等。失败后按 OK 可手动重试。
+- **HLS 识别**：除 `.m3u8` 外，也识别 `/hls/`、`/live/`、`/relay/`、`/proxy/` 等无扩展名的中转播放列表；明确的文件流后缀（`.ts`/`.mp4` 等）仍按渐进式处理。
+- **后台恢复**：从主屏/其他应用返回时自动恢复播放。
 - **离线兜底**：直播源缓存 6 小时；网络异常时自动使用旧缓存，保证有台可看。
 - **源管理**：多源增删改切换、强制刷新、记忆开关。
 
@@ -39,6 +42,8 @@ cd iptv-app
 #   keyAlias=iptv / storePassword=... / keyPassword=...
 
 ./gradlew :app:assembleRelease
+# 可选：希望首次启动就自动加载自己的直播源（仅本机使用，勿把地址写进仓库）
+./gradlew :app:assembleRelease -PdefaultSourceUrl=<你的M3U地址>
 ```
 
 产物：`app/build/outputs/apk/release/app-release.apk`。

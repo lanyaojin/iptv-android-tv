@@ -49,6 +49,7 @@ public class MainActivity extends AppCompatActivity
     private String selectedGroup;
     private String loadedSourceUrl;
     private boolean loadingPlaylist;
+    private boolean playFailed;
 
     private PlayerView playerView;
     private PlayerController controller;
@@ -183,8 +184,10 @@ public class MainActivity extends AppCompatActivity
                 refreshChannelList();
 
                 Channel target = current != null ? findByUrl(current.url) : findLastChannel();
-                if (target == null) target = playlist.channels.get(0);
-                play(target, current != null);
+                if (target == null && !playlist.channels.isEmpty()) {
+                    target = playlist.channels.get(0);
+                }
+                if (target != null) play(target, current != null);
             }
 
             @Override
@@ -218,6 +221,7 @@ public class MainActivity extends AppCompatActivity
     private void play(Channel channel, boolean showBanner) {
         if (channel == null) return;
         current = channel;
+        playFailed = false;
         prefs.setLastUrl(channel.url);
         controller.play(channel.url);
         updateInfo(channel);
@@ -236,21 +240,23 @@ public class MainActivity extends AppCompatActivity
 
     @Override
     public void onReady() {
+        playFailed = false;
         hideStatus();
     }
 
     @Override
     public void onBuffering() {
-        if (current != null) setStatus("缓冲中…", true);
+        if (!playFailed && current != null) setStatus("缓冲中…", true);
     }
 
     @Override
     public void onRetrying(int attempt) {
-        setStatus("信号中断，正在第 " + attempt + " 次重连…", true);
+        setStatus(getString(R.string.retrying, attempt, PlayerController.MAX_RETRY), true);
     }
 
     @Override
     public void onFailed(String message) {
+        playFailed = true;
         setStatus(getString(R.string.play_failed, message), false);
     }
 
@@ -475,6 +481,19 @@ public class MainActivity extends AppCompatActivity
                 case KeyEvent.KEYCODE_ENTER:
                 case KeyEvent.KEYCODE_NUMPAD_ENTER:
                     if (!overlayShown) {
+                        if (playFailed) {
+                            playFailed = false;
+                            controller.retry();
+                            setStatus(getString(R.string.retrying_manual), true);
+                        } else {
+                            showOverlay();
+                        }
+                        return true;
+                    }
+                    break;
+                case KeyEvent.KEYCODE_DPAD_RIGHT:
+                    // 播放态右键同样可打开频道列表：失败态 OK 用于重试时，列表入口仍可用。
+                    if (!overlayShown) {
                         showOverlay();
                         return true;
                     }
@@ -542,6 +561,12 @@ public class MainActivity extends AppCompatActivity
         } else if (!loadingPlaylist && playlist != null) {
             refreshGroups();
             refreshChannelList();
+            // onStop() 会 stop() 播放器；从后台返回时恢复播放，避免停在黑屏。
+            if (controller.isIdle() && current != null) {
+                playFailed = false;
+                setStatus(getString(R.string.loading_channel, current.name), true);
+                controller.resume();
+            }
         }
     }
 
