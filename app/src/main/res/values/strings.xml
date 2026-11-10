@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">IPTV</string>
+    <string name="loading">正在加载直播源…</string>
+    <string name="loading_channel">正在打开 %1$s</string>
+    <string name="empty_source">未配置直播源</string>
+    <string name="empty_source_tip">请在设置中添加 M3U 直播源地址</string>
+    <string name="action_settings">设置</string>
+    <string name="action_retry">重试</string>
+    <string name="play_failed">播放失败：%1$s</string>
+    <string name="play_failed_tip">信号中断，已重试 %1$d 次</string>
+    <string name="press_again_exit">再按一次返回键退出</string>
+    <string name="all_channels">全部频道</string>
+    <string name="favorites">我的收藏</string>
+    <string name="ungrouped">未分组</string>
+    <string name="channel_count">共 %1$d 个频道</string>
+    <string name="favorite_add">已加入收藏</string>
+    <string name="favorite_remove">已取消收藏</string>
+    <string name="source_refreshing">正在刷新直播源…</string>
+    <string name="source_refreshed">直播源已更新：%1$d 个频道</string>
+    <string name="source_refresh_failed">刷新失败：%1$s</string>
+    <string name="hint_keys">OK 换台 · 上下键切台 · 菜单键设置</string>
+    <string name="settings">设置</string>
+    <string name="settings_source">直播源管理</string>
+    <string name="settings_refresh">刷新直播源</string>
+    <string name="settings_remember">记住上次频道</string>
+    <string name="settings_about">关于</string>
+    <string name="about_text">IPTV %1$s\n\n仅保留直播功能的电视端播放器。\nM3U/M3U8 直播源 · ExoPlayer 内核\n\n遥控器：\n上下键 / 频道键 — 切换频道\nOK — 打开频道列表\n菜单键 — 设置\n数字键 — 直接输入频道号\n长按 OK（列表内）— 收藏 / 取消收藏</string>
+    <string name="add_source">添加直播源</string>
+    <string name="edit_source">编辑直播源</string>
+    <string name="source_name">名称</string>
+    <string name="source_url">地址（M3U/M3U8）</string>
+    <string name="save">保存</string>
+    <string name="cancel">取消</string>
+    <string name="delete">删除</string>
+    <string name="confirm">确定</string>
+    <string name="url_invalid">地址不能为空</string>
+    <string name="no_source">还没有直播源，先添加一个吧</string>
+    <string name="current">当前</string>
+</resources>
