@@ -32,7 +32,11 @@ public class PlayerControllerTest {
         assertTrue(looks("http://cdn/live/cctv1"));
         assertTrue(looks("http://cdn/hls/stream"));
         assertTrue(looks("http://cdn/proxy/channel"));
-        assertFalse(looks("http://nas/608807420"));      // 无扩展名的中转短链
+        // 咪咕数字代理：纯数字 ID、无扩展名，但返回 m3u8 清单，必须按 HLS 处理，
+        // 否则 ExoPlayer 会按渐进式解析 m3u8 文本而报 UnrecognizedInputFormatException。
+        assertTrue(looks("https://example.com/608807420"));
+        assertTrue(looks("http://nas/608807420"));
+        assertTrue(looks("http://nas/some-channel")); // 无扩展名中转地址
         assertFalse(looks("http://cdn/clip.ts"));        // 明确的文件流
         assertFalse(looks("http://cdn/movie.mp4"));
         assertFalse(looks((String) null));

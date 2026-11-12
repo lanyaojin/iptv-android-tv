@@ -13,6 +13,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.Nullable;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.media3.ui.PlayerView;
 import androidx.recyclerview.widget.GridLayoutManager;
@@ -46,6 +47,10 @@ public class MainActivity extends AppCompatActivity
     private Prefs prefs;
     private Playlist playlist;
     private Channel current;
+    /** 当前频道正播的线路下标，默认 0（首条线路）。 */
+    private int currentLine;
+    /** 自动换线路重试的起始线路下标，-1 表示不在自动换线中。 */
+    private int lineFallbackStart = -1;
     private String selectedGroup;
     private String loadedSourceUrl;
     private boolean loadingPlaylist;
@@ -82,8 +87,10 @@ public class MainActivity extends AppCompatActivity
         try {
             int number = Integer.parseInt(text);
             Channel channel = playlist.byNumber(number);
-            if (channel != null) play(channel, true);
-            else toast("没有 " + number + " 号频道");
+            if (channel != null) {
+                currentLine = 0;
+                play(channel, true);
+            } else toast("没有 " + number + " 号频道");
         } catch (NumberFormatException ignored) {
         }
     };
@@ -187,7 +194,12 @@ public class MainActivity extends AppCompatActivity
                 if (target == null && !playlist.channels.isEmpty()) {
                     target = playlist.channels.get(0);
                 }
-                if (target != null) play(target, current != null);
+                if (target != null) {
+                    // 恢复上次播放的线路（按上次保存的线路地址定位，找不到则用首条线路）
+                    int line = target.lineIndexOfUrl(prefs.getLastUrl());
+                    currentLine = line >= 0 ? line : 0;
+                    play(target, current != null);
+                }
             }
 
             @Override
@@ -211,7 +223,8 @@ public class MainActivity extends AppCompatActivity
     private Channel findByUrl(String url) {
         if (playlist == null || url == null) return null;
         for (Channel c : playlist.channels) {
-            if (url.equals(c.url)) return c;
+            // 任一线路地址匹配即命中（多线路频道用非首条线路地址也能找到）
+            if (c.lineIndexOfUrl(url) >= 0) return c;
         }
         return null;
     }
@@ -221,13 +234,31 @@ public class MainActivity extends AppCompatActivity
     private void play(Channel channel, boolean showBanner) {
         if (channel == null) return;
         current = channel;
+        if (currentLine < 0 || currentLine >= channel.lineCount()) currentLine = 0;
         playFailed = false;
-        prefs.setLastUrl(channel.url);
-        controller.play(channel.url);
+        lineFallbackStart = -1;
+        String url = channel.lineUrl(currentLine);
+        prefs.setLastUrl(url);
+        controller.play(url);
         updateInfo(channel);
         channelAdapter.setSelected(channel.number);
         setStatus(getString(R.string.loading_channel, channel.name), true);
         if (showBanner && overlay.getVisibility() != View.VISIBLE) showSwitchBanner(channel);
+    }
+
+    /** 切换到当前频道的指定线路并播放（手动换线与自动换线重试共用）。 */
+    private void playLine(int line) {
+        if (current == null) return;
+        if (line < 0 || line >= current.lineCount()) return;
+        currentLine = line;
+        playFailed = false;
+        String url = current.lineUrl(line);
+        prefs.setLastUrl(url);
+        controller.play(url);
+        updateInfo(current);
+        channelAdapter.setSelected(current.number);
+        setStatus(getString(R.string.loading_channel, current.name), true);
+        showSwitchBanner(current);
     }
 
     private void switchChannel(int delta) {
@@ -235,12 +266,14 @@ public class MainActivity extends AppCompatActivity
         int index = current == null ? -1 : playlist.channels.indexOf(current);
         if (index < 0) index = 0;
         int next = (index + delta + playlist.size()) % playlist.size();
+        currentLine = 0;
         play(playlist.channels.get(next), true);
     }
 
     @Override
     public void onReady() {
         playFailed = false;
+        lineFallbackStart = -1;
         hideStatus();
     }
 
@@ -256,6 +289,17 @@ public class MainActivity extends AppCompatActivity
 
     @Override
     public void onFailed(String message) {
+        // 多线路频道：按顺序自动试下一条线路（试一遍回到起始线路即全部失败）。
+        // 直接 playLine，不走 controller 的 3 次重试。
+        if (current != null && current.hasMultipleLines()) {
+            if (lineFallbackStart < 0) lineFallbackStart = currentLine;
+            int next = (currentLine + 1) % current.lineCount();
+            if (next != lineFallbackStart) {
+                playLine(next);
+                return;
+            }
+            lineFallbackStart = -1;
+        }
         playFailed = true;
         setStatus(getString(R.string.play_failed, message), false);
     }
@@ -277,6 +321,10 @@ public class MainActivity extends AppCompatActivity
         infoName.setText(channel.name);
         String group = (channel.group == null || channel.group.isEmpty())
                 ? getString(R.string.ungrouped) : channel.group;
+        if (channel.hasMultipleLines()) {
+            String label = channel.lineLabel(currentLine);
+            if (label != null) group = group + " · " + label;
+        }
         Source source = prefs.currentSource();
         infoGroup.setText(source != null ? group + " · " + source.displayName() : group);
         infoClock.setText(new SimpleDateFormat("HH:mm", Locale.getDefault()).format(new Date()));
@@ -284,7 +332,12 @@ public class MainActivity extends AppCompatActivity
 
     private void showSwitchBanner(Channel channel) {
         bannerNumber.setText(channel.displayNumber());
-        bannerName.setText(channel.name);
+        String name = channel.name;
+        if (channel.hasMultipleLines()) {
+            String label = channel.lineLabel(currentLine);
+            if (label != null) name = name + " · " + label;
+        }
+        bannerName.setText(name);
         switchBanner.setVisibility(View.VISIBLE);
         handler.removeCallbacks(hideBanner);
         handler.postDelayed(hideBanner, 2600);
@@ -395,8 +448,30 @@ public class MainActivity extends AppCompatActivity
 
     @Override
     public void onClick(Channel channel) {
+        if (channel.hasMultipleLines()) {
+            showLinePicker(channel);
+            return;
+        }
+        currentLine = 0;
+        lineFallbackStart = -1;
         play(channel, false);
         hideOverlay();
+    }
+
+    /** 多线路频道：弹出线路列表供选择（标题为频道名）。 */
+    private void showLinePicker(Channel channel) {
+        CharSequence[] labels = new CharSequence[channel.lineCount()];
+        for (int i = 0; i < labels.length; i++) labels[i] = channel.lineLabel(i);
+        new AlertDialog.Builder(this)
+                .setTitle(channel.name)
+                .setItems(labels, (dialog, which) -> {
+                    currentLine = which;
+                    lineFallbackStart = -1;
+                    play(channel, false);
+                    hideOverlay();
+                })
+                .setNegativeButton(R.string.cancel, null)
+                .show();
     }
 
     @Override
@@ -495,6 +570,17 @@ public class MainActivity extends AppCompatActivity
                     // 播放态右键同样可打开频道列表：失败态 OK 用于重试时，列表入口仍可用。
                     if (!overlayShown) {
                         showOverlay();
+                        return true;
+                    }
+                    break;
+                case KeyEvent.KEYCODE_DPAD_LEFT:
+                    // 播放态左键：多线路频道切换到下一条线路；单线路不做任何事。
+                    if (!overlayShown) {
+                        if (current != null && current.hasMultipleLines()) {
+                            int next = (currentLine + 1) % current.lineCount();
+                            lineFallbackStart = -1;
+                            playLine(next);
+                        }
                         return true;
                     }
                     break;

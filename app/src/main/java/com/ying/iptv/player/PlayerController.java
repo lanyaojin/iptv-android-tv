@@ -143,6 +143,9 @@ public class PlayerController implements Player.Listener {
     /**
      * 判断是否为 HLS。除 .m3u8 外，覆盖 /relay/、/live/ 一类不带扩展名
      * 但实际返回 m3u8 播放列表的中转路径；明确的文件流扩展名优先排除。
+     * 另覆盖咪咕数字代理（/1905/&lt;纯数字ID&gt;）等无扩展名中转地址：
+     * 这类地址返回的也是 m3u8 清单，若按渐进式文件处理，ExoPlayer 会因
+     * 无法识别 m3u8 文本而报 UnrecognizedInputFormatException。
      */
     private static boolean looksLikeHls(String address) {
         if (address == null) return false;
@@ -152,8 +155,14 @@ public class PlayerController implements Player.Listener {
             return false;
         }
         if (p.contains(".m3u8")) return true;
-        return p.contains("/hls/") || p.contains("/live/")
-                || p.contains("/relay/") || p.contains("/proxy/");
+        if (p.contains("/hls/") || p.contains("/live/")
+                || p.contains("/relay/") || p.contains("/proxy/")) {
+            return true;
+        }
+        int lastSlash = p.lastIndexOf('/');
+        String last = lastSlash >= 0 ? p.substring(lastSlash + 1) : p;
+        if (last.matches("\\d+")) return true; // /608807420 咪咕数字代理
+        return !last.contains("."); // 路径末段无扩展名 → 按 HLS 处理
     }
 
     private DataSource.Factory dataSourceFactory() {
