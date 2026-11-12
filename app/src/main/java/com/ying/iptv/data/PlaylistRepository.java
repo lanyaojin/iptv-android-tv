@@ -46,12 +46,14 @@ public final class PlaylistRepository {
 
         EXECUTOR.execute(() -> {
             File cache = cacheFile(app, url);
+            File rulesCache = new File(cache.getAbsolutePath() + ".rules");
             try {
                 boolean fresh = hasCache && !forceRefresh
                         && System.currentTimeMillis() - cache.lastModified() < CACHE_TTL_MS;
                 if (fresh) {
-                    String text = readFile(cache);
-                    Playlist playlist = M3uParser.parse(text);
+                    String remote = rulesCache.isFile() ? readFile(rulesCache) : null;
+                    Playlist playlist = M3uParser.parse(readFile(cache),
+                            GroupRules.withServerJson(remote));
                     if (!playlist.isEmpty()) {
                         MAIN.post(() -> callback.onSuccess(playlist, true));
                         return;
@@ -59,18 +61,26 @@ public final class PlaylistRepository {
                 }
 
                 String text = download(url);
-                Playlist playlist = M3uParser.parse(text);
+                // 同源后台的自定义分组规则：用户在 admin 里改，刷新订阅即同步到客户端。
+                // 接口不存在/超时/返回异常时静默退化成内置规则，绝不影响频道加载。
+                String remote = fetchGroupRules(url);
+                GroupRules rules = GroupRules.withServerJson(remote);
+                Playlist playlist = M3uParser.parse(text, rules);
                 if (playlist.isEmpty()) {
                     MAIN.post(() -> callback.onError("该地址未解析到直播频道"));
                     return;
                 }
                 writeFile(cache, text);
+                // 写空规则表示"服务端没有规则"，避免删除规则后仍沿用上次的缓存
+                writeFile(rulesCache, remote == null ? "{\"success\":true,\"data\":[]}" : remote);
                 MAIN.post(() -> callback.onSuccess(playlist, false));
             } catch (Exception e) {
                 // 网络失败时退回旧缓存，保证电视上仍有台可看
                 if (hasCache) {
                     try {
-                        Playlist playlist = M3uParser.parse(readFile(cache));
+                        String remote = rulesCache.isFile() ? readFile(rulesCache) : null;
+                        Playlist playlist = M3uParser.parse(readFile(cache),
+                                GroupRules.withServerJson(remote));
                         if (!playlist.isEmpty()) {
                             MAIN.post(() -> callback.onSuccess(playlist, true));
                             return;
@@ -81,6 +91,31 @@ public final class PlaylistRepository {
                 MAIN.post(() -> callback.onError(describe(e)));
             }
         });
+    }
+
+    /** 读取同源 admin 后台的「关键字自动分组规则」；失败返回 null。 */
+    private static String fetchGroupRules(String playlistUrl) {
+        HttpURLConnection conn = null;
+        try {
+            URL u = new URL(playlistUrl);
+            String scheme = u.getProtocol();
+            if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) return null;
+            URL api = new URL(scheme + "://" + u.getAuthority() + "/api/group-keyword-rules");
+            conn = (HttpURLConnection) api.openConnection();
+            conn.setConnectTimeout(3000);
+            conn.setReadTimeout(3000);
+            conn.setRequestProperty("User-Agent", UA);
+            conn.setRequestProperty("Accept", "application/json");
+            if (conn.getResponseCode() != 200) return null;
+            try (InputStream in = conn.getInputStream()) {
+                String body = new String(readAll(in), Charset.forName("UTF-8"));
+                return body.contains("\"data\"") ? body : null;
+            }
+        } catch (Exception ignored) {
+            return null;
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
     }
 
     /** 清空某个源的缓存，供切换源/刷新使用。 */

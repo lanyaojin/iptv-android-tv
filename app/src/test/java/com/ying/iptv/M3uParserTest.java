@@ -261,4 +261,37 @@ public class M3uParserTest {
         assertEquals("央视频", hunan.lineLabel(0));
         assertEquals("卫视", hunan.lineLabel(1));
     }
+
+    @Test
+    public void foldsSourceGroupsIntoStandardCategories() {
+        String text = "#EXTINF:-1 group-title=\"影视\",电影一台\nhttp://h/m1\n"
+                + "#EXTINF:-1 group-title=\"娱乐时尚\",时尚一台\nhttp://h/f1\n"
+                + "#EXTINF:-1 group-title=\"娱乐综艺\",综艺一台\nhttp://h/v1\n"
+                + "#EXTINF:-1 group-title=\"抖音\",抖音一台\nhttp://h/d1\n"
+                + "#EXTINF:-1 group-title=\"虎牙\",虎牙一台\nhttp://h/t1\n"
+                + "#EXTINF:-1 group-title=\"澳门\",澳门一台\nhttp://h/mo1\n"
+                + "#EXTINF:-1 group-title=\"台湾\",台湾一台\nhttp://h/tw1\n"
+                + "#EXTINF:-1 group-title=\"马来西亚\",大马一台\nhttp://h/my1\n"
+                + "#EXTINF:-1 group-title=\"韩国\",韩国一台\nhttp://h/kr1\n";
+        Playlist p = M3uParser.parse(text);
+        assertEquals(9, p.size());
+        assertEquals(3, p.byGroup("影视").size());
+        assertEquals(2, p.byGroup("网络直播").size());
+        assertEquals(2, p.byGroup("港澳台").size());
+        assertEquals(2, p.byGroup("海外").size());
+        assertEquals(0, p.byGroup("娱乐时尚").size());
+        assertEquals(0, p.byGroup("澳门").size());
+    }
+
+    @Test
+    public void regionalSatelliteChannelStaysInRegion() {
+        // 频道名含「卫视」，但源站明确放在「澳门」，不应被名称规则抢到「卫视」
+        String text = "#EXTINF:-1 group-title=\"澳门\",澳门莲花卫视\nhttp://h/lotus\n"
+                + "#EXTINF:-1 group-title=\"卫视\",湖南卫视\nhttp://h/hunan\n";
+        Playlist p = M3uParser.parse(text);
+        assertEquals(1, p.byGroup("港澳台").size());
+        assertEquals("港澳台", p.byGroup("港澳台").get(0).group);
+        assertEquals(1, p.byGroup("卫视").size());
+    }
+
 }

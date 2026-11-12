@@ -24,6 +24,8 @@ public class Prefs {
     private static final String KEY_FAVORITES = "favorites";
     private static final String KEY_REMEMBER = "remember";
     private static final String KEY_NEED_REFRESH = "need_refresh";
+    /** 每个频道上次稳定播放的线路下标，键为「line_」+ Channel.key()。 */
+    private static final String KEY_LINE_PREFIX = "line_";
 
     private final SharedPreferences sp;
 
@@ -134,6 +136,20 @@ public class Prefs {
 
     public void setRemember(boolean remember) {
         sp.edit().putBoolean(KEY_REMEMBER, remember).apply();
+    }
+
+    /**
+     * 返回该频道上次稳定播放的线路下标；无记录或关闭「记住上次频道」时返回 -1。
+     * 换台时优先用这条线路，避免每次都回到可能不稳定/签名易失效的首条线路。
+     */
+    public int getPreferredLine(String channelKey) {
+        if (channelKey == null || channelKey.isEmpty() || !isRemember()) return -1;
+        return sp.getInt(KEY_LINE_PREFIX + channelKey, -1);
+    }
+
+    public void setPreferredLine(String channelKey, int line) {
+        if (channelKey == null || channelKey.isEmpty() || line < 0 || !isRemember()) return;
+        sp.edit().putInt(KEY_LINE_PREFIX + channelKey, line).apply();
     }
 
     // ---------------- 收藏 ----------------

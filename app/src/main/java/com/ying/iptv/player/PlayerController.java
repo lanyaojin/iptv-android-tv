@@ -12,6 +12,7 @@ import androidx.media3.common.Player;
 import androidx.media3.datasource.DataSource;
 import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.datasource.HttpDataSource;
+import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.hls.HlsMediaSource;
 import androidx.media3.exoplayer.source.MediaSource;
@@ -48,11 +49,20 @@ public class PlayerController implements Player.Listener {
     private int attempt;
     private long startedAt;
     private boolean failed;
+    /** 多线路频道：首次可恢复错误立即交给上层换线，不空等 3 轮重连。 */
+    private boolean fastFailover;
     private Listener listener;
 
     public PlayerController(Context context, PlayerView view) {
         Context app = context.getApplicationContext();
-        this.player = new ExoPlayer.Builder(app).build();
+        // 源站直播窗口很短（分片 5~6s、约 4 片），默认 50s 缓冲目标不切实际。
+        // 缩短起播与卡顿后恢复所需缓冲，同时保留约 2~5 个分片的余量。
+        DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
+                .setBufferDurationsMs(15000, 30000, 1500, 3000)
+                .build();
+        this.player = new ExoPlayer.Builder(app)
+                .setLoadControl(loadControl)
+                .build();
         this.player.setWakeMode(C.WAKE_MODE_NETWORK);
         this.player.addListener(this);
         this.playerView = view;
@@ -63,6 +73,11 @@ public class PlayerController implements Player.Listener {
 
     public void setListener(Listener listener) {
         this.listener = listener;
+    }
+
+    /** 是否启用「快速换线」：多线路频道首轮失败直接回调 onFailed，由上层换下一条线路。 */
+    public void setFastFailover(boolean enabled) {
+        this.fastFailover = enabled;
     }
 
     public ExoPlayer player() {
@@ -194,13 +209,19 @@ public class PlayerController implements Player.Listener {
         handler.removeCallbacksAndMessages(null);
 
         String permanent = permanentReason(error);
-        if (permanent == null && !looksLikeHls(url) && isUnrecognizedContent(error)) {
-            // 中转接口返回 JSON/空内容等：重试同样解不出视频流，直接提示换台。
+        if (permanent == null && isUnrecognizedContent(error)) {
+            // 中转接口返回 JSON/空内容、或 HLS 清单解析失败：重试同样解不出视频流。
             permanent = "源返回的不是可播放的视频流";
         }
         if (permanent != null) {
             // 确定性错误重试无意义，立即提示，避免干等 3 轮。
             fail(permanent);
+            return;
+        }
+        if (fastFailover) {
+            // 多线路频道首轮失败：换一条线路比反复重连同一条死链恢复更快。
+            // 一圈线路都试完后由上层关闭此标志，再走完整重试兜底。
+            fail("当前线路不可用");
             return;
         }
         if (attempt < MAX_RETRY) {
@@ -240,7 +261,7 @@ public class PlayerController implements Player.Listener {
         return null;
     }
 
-    /** 解析器无法识别返回内容时，判定为确定性失败（仅对非 HLS 源生效）。 */
+    /** 解析器无法识别返回内容时判定为确定性失败（含 HLS 清单被 JSON/错误页替代的情况）。 */
     private static boolean isUnrecognizedContent(Throwable error) {
         Throwable t = error;
         while (t != null) {
@@ -250,7 +271,12 @@ public class PlayerController implements Player.Listener {
                 String lower = msg.toLowerCase(Locale.ROOT);
                 if (lower.contains("none of the available extractors")
                         || lower.contains("could not read the stream")
-                        || lower.contains("unexpected end of stream")) {
+                        || lower.contains("unexpected end of stream")
+                        || lower.contains("unexpected #extm3u")
+                        || lower.contains("does not start with #extm3u")
+                        || lower.contains("input does not start")
+                        || lower.contains("invalid playlist")
+                        || lower.contains("parser exception")) {
                     return true;
                 }
             }

@@ -4,6 +4,7 @@ import android.content.Intent;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.WindowManager;
@@ -32,8 +33,10 @@ import com.ying.iptv.ui.GroupAdapter;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 /** 直播主界面：打开即播、遥控器换台、频道列表、收藏。 */
@@ -43,6 +46,10 @@ public class MainActivity extends AppCompatActivity
     private static final String GROUP_FAVORITES = "@fav";
     private static final String GROUP_UNGROUPED = "@none";
     private static final String STATE_GROUP = "selected_group";
+    /** 稳定播放这么久之后，才把自动换线状态复位，视为一次新的播放会话。 */
+    private static final long STABLE_RESET_MS = 8000L;
+    private static final long FAILOVER_WINDOW_MS = 60000L;
+    private static final int MAX_AUTO_SWITCHES = 8;
 
     private Prefs prefs;
     private Playlist playlist;
@@ -51,6 +58,13 @@ public class MainActivity extends AppCompatActivity
     private int currentLine;
     /** 自动换线路重试的起始线路下标，-1 表示不在自动换线中。 */
     private int lineFallbackStart = -1;
+    /** 所有线路首轮都失败后，是否已用过「完整重连」兜底，避免无限循环。 */
+    private boolean finalRetryUsed;
+    /** 自动换线的频次限制，防止抖动源在 READY/ERROR 之间反复触发无限换线。 */
+    private int autoSwitchCount;
+    private long autoSwitchWindowStart;
+    /** 本次运行中各频道已验证稳定的线路，关闭「记忆」时也有效。 */
+    private final Map<String, Integer> stableLines = new HashMap<>();
     private String selectedGroup;
     private String loadedSourceUrl;
     private boolean loadingPlaylist;
@@ -88,7 +102,7 @@ public class MainActivity extends AppCompatActivity
             int number = Integer.parseInt(text);
             Channel channel = playlist.byNumber(number);
             if (channel != null) {
-                currentLine = 0;
+                currentLine = preferredLineFor(channel);
                 play(channel, true);
             } else toast("没有 " + number + " 号频道");
         } catch (NumberFormatException ignored) {
@@ -97,6 +111,14 @@ public class MainActivity extends AppCompatActivity
 
     private final Runnable hideBanner = () -> switchBanner.setVisibility(View.GONE);
     private final Runnable hideInfo = () -> infoBar.setVisibility(View.GONE);
+    /** 稳定播放 8 秒后复位换线额度，之后再次断流才算新的故障回合。 */
+    private final Runnable resetFailover = () -> {
+        finalRetryUsed = false;
+        autoSwitchCount = 0;
+        autoSwitchWindowStart = 0;
+        lineFallbackStart = -1;
+        if (current != null) controller.setFastFailover(current.hasMultipleLines());
+    };
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -235,8 +257,9 @@ public class MainActivity extends AppCompatActivity
         if (channel == null) return;
         current = channel;
         if (currentLine < 0 || currentLine >= channel.lineCount()) currentLine = 0;
-        playFailed = false;
-        lineFallbackStart = -1;
+        resetFailoverState();
+        // 多线路频道：首轮失败直接换线；一圈试完后由 onFailed 关掉此标志做完整重试。
+        controller.setFastFailover(channel.hasMultipleLines());
         String url = channel.lineUrl(currentLine);
         prefs.setLastUrl(url);
         controller.play(url);
@@ -246,19 +269,45 @@ public class MainActivity extends AppCompatActivity
         if (showBanner && overlay.getVisibility() != View.VISIBLE) showSwitchBanner(channel);
     }
 
-    /** 切换到当前频道的指定线路并播放（手动换线与自动换线重试共用）。 */
-    private void playLine(int line) {
+    /** 切换到当前频道的指定线路。automatic=true 为故障自动换线，不弹换台横幅。 */
+    private void playLine(int line, boolean automatic) {
         if (current == null) return;
         if (line < 0 || line >= current.lineCount()) return;
         currentLine = line;
         playFailed = false;
+        handler.removeCallbacks(resetFailover);
+        if (!automatic) {
+            resetFailoverState();
+            controller.setFastFailover(current.hasMultipleLines());
+        }
         String url = current.lineUrl(line);
         prefs.setLastUrl(url);
         controller.play(url);
         updateInfo(current);
         channelAdapter.setSelected(current.number);
-        setStatus(getString(R.string.loading_channel, current.name), true);
-        showSwitchBanner(current);
+        if (automatic) {
+            setStatus(getString(R.string.switching_line, line + 1, current.lineCount()), true);
+            switchBanner.setVisibility(View.GONE);
+        } else {
+            setStatus(getString(R.string.loading_channel, current.name), true);
+            showSwitchBanner(current);
+        }
+    }
+
+    private void resetFailoverState() {
+        playFailed = false;
+        lineFallbackStart = -1;
+        finalRetryUsed = false;
+        autoSwitchCount = 0;
+        autoSwitchWindowStart = 0;
+        handler.removeCallbacks(resetFailover);
+    }
+
+    /** 该频道上次稳定播放的线路：优先本次运行记录，其次持久化偏好。 */
+    private int preferredLineFor(Channel channel) {
+        Integer session = stableLines.get(channel.key());
+        int line = session != null ? session : prefs.getPreferredLine(channel.key());
+        return (line >= 0 && line < channel.lineCount()) ? line : 0;
     }
 
     private void switchChannel(int delta) {
@@ -266,14 +315,25 @@ public class MainActivity extends AppCompatActivity
         int index = current == null ? -1 : playlist.channels.indexOf(current);
         if (index < 0) index = 0;
         int next = (index + delta + playlist.size()) % playlist.size();
-        currentLine = 0;
-        play(playlist.channels.get(next), true);
+        Channel nextChannel = playlist.channels.get(next);
+        // 记住每个频道上次稳定播放的线路，避免每次换台都回到可能较差的首条线路
+        currentLine = preferredLineFor(nextChannel);
+        play(nextChannel, true);
     }
 
     @Override
     public void onReady() {
         playFailed = false;
         lineFallbackStart = -1;
+        if (current != null) {
+            // 记住该频道这次稳定播放的线路，下次换回它时直接使用。
+            stableLines.put(current.key(), currentLine);
+            prefs.setPreferredLine(current.key(), currentLine);
+        }
+        // 只有稳定播放一段时间才复位换线额度；抖动源短暂 READY 不重置，
+        // 否则会形成「就绪 → 断流 → 换线」的无限循环。
+        handler.removeCallbacks(resetFailover);
+        handler.postDelayed(resetFailover, STABLE_RESET_MS);
         hideStatus();
     }
 
@@ -289,18 +349,40 @@ public class MainActivity extends AppCompatActivity
 
     @Override
     public void onFailed(String message) {
-        // 多线路频道：按顺序自动试下一条线路（试一遍回到起始线路即全部失败）。
-        // 直接 playLine，不走 controller 的 3 次重试。
-        if (current != null && current.hasMultipleLines()) {
+        handler.removeCallbacks(resetFailover);
+        // 多线路频道：首轮错误直接换下一条线路，跳过 3 次空等重连；
+        // 一圈线路都试过后，再用完整重连链兜底一次，最后才提示失败。
+        if (current != null && current.hasMultipleLines() && !finalRetryUsed) {
+            long now = SystemClock.elapsedRealtime();
+            if (autoSwitchWindowStart == 0 || now - autoSwitchWindowStart > FAILOVER_WINDOW_MS) {
+                autoSwitchWindowStart = now;
+                autoSwitchCount = 0;
+            }
+            if (autoSwitchCount >= MAX_AUTO_SWITCHES) {
+                // 源抖动过于频繁：停止自动换线，交给用户手动重试，避免无限循环。
+                controller.setFastFailover(false);
+                playFailed = true;
+                setStatus(getString(R.string.play_failed, message), false);
+                return;
+            }
             if (lineFallbackStart < 0) lineFallbackStart = currentLine;
             int next = (currentLine + 1) % current.lineCount();
             if (next != lineFallbackStart) {
-                playLine(next);
+                autoSwitchCount++;
+                playLine(next, true);
                 return;
             }
+            // 全部线路首轮都失败：回到该频道最稳的线路，做一次完整重连（3 次退避）。
+            int start = preferredLineFor(current);
             lineFallbackStart = -1;
+            finalRetryUsed = true;
+            controller.setFastFailover(false);
+            playLine(start, true);
+            setStatus(getString(R.string.retrying_manual), true);
+            return;
         }
         playFailed = true;
+        controller.setFastFailover(false);
         setStatus(getString(R.string.play_failed, message), false);
     }
 
@@ -453,7 +535,6 @@ public class MainActivity extends AppCompatActivity
             return;
         }
         currentLine = 0;
-        lineFallbackStart = -1;
         play(channel, false);
         hideOverlay();
     }
@@ -466,7 +547,6 @@ public class MainActivity extends AppCompatActivity
                 .setTitle(channel.name)
                 .setItems(labels, (dialog, which) -> {
                     currentLine = which;
-                    lineFallbackStart = -1;
                     play(channel, false);
                     hideOverlay();
                 })
@@ -558,8 +638,13 @@ public class MainActivity extends AppCompatActivity
                     if (!overlayShown) {
                         if (playFailed) {
                             playFailed = false;
-                            controller.retry();
-                            setStatus(getString(R.string.retrying_manual), true);
+                            if (current != null && current.hasMultipleLines()) {
+                                // 失败态按 OK：先换下一条线路，比反复重试同一条死链有效。
+                                playLine((currentLine + 1) % current.lineCount(), false);
+                            } else {
+                                controller.retry();
+                                setStatus(getString(R.string.retrying_manual), true);
+                            }
                         } else {
                             showOverlay();
                         }
@@ -578,8 +663,7 @@ public class MainActivity extends AppCompatActivity
                     if (!overlayShown) {
                         if (current != null && current.hasMultipleLines()) {
                             int next = (currentLine + 1) % current.lineCount();
-                            lineFallbackStart = -1;
-                            playLine(next);
+                            playLine(next, false);
                         }
                         return true;
                     }

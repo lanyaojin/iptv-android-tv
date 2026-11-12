@@ -67,6 +67,27 @@ public class AppSmokeTest {
     }
 
     @Test
+    public void preferredLineIsRememberedPerChannel() {
+        Context context = ApplicationProvider.getApplicationContext();
+        context.getSharedPreferences("iptv_prefs", Context.MODE_PRIVATE).edit().clear().commit();
+        Prefs prefs = Prefs.get(context);
+        String key = "id:cctv1";
+        assertEquals(-1, prefs.getPreferredLine(key));
+
+        prefs.setPreferredLine(key, 2);
+        assertEquals(2, prefs.getPreferredLine(key));
+        assertEquals(-1, prefs.getPreferredLine("id:cctv2"));
+
+        // 关闭「记住上次频道」时不持久化线路，避免残留旧偏好
+        prefs.setRemember(false);
+        assertEquals(-1, prefs.getPreferredLine(key));
+        prefs.setPreferredLine(key, 1);
+        assertEquals(-1, prefs.getPreferredLine(key));
+        prefs.setRemember(true);
+        assertEquals(2, prefs.getPreferredLine(key));
+    }
+
+    @Test
     public void mainActivityInflatesAndSurvivesKeys() {
         try (ActivityController<MainActivity> controller =
                      Robolectric.buildActivity(MainActivity.class).setup()) {

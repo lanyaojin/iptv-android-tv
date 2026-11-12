@@ -10,6 +10,7 @@
     <string name="play_failed">该频道暂时无法播放（%1$s）\n按 OK 重试 · 右键列表 · 上下键换台</string>
     <string name="retrying">信号中断，正在重连（%1$d/%2$d）…</string>
     <string name="retrying_manual">正在重新打开当前频道…</string>
+    <string name="switching_line">正在切换线路（%1$d/%2$d）…</string>
     <string name="play_failed_tip">信号中断，已重试 %1$d 次</string>
     <string name="press_again_exit">再按一次返回键退出</string>
     <string name="all_channels">全部频道</string>
@@ -27,7 +28,7 @@
     <string name="settings_refresh">刷新直播源</string>
     <string name="settings_remember">记住上次频道</string>
     <string name="settings_about">关于</string>
-    <string name="about_text">IPTV %1$s\n\n仅保留直播功能的电视端播放器。\nM3U/M3U8 直播源 · ExoPlayer 内核\n\n遥控器：\n上下键 / 频道键 — 切换频道\nOK — 打开频道列表（播放失败时重试）\n右键 — 打开频道列表\n菜单键 — 设置\n数字键 — 直接输入频道号\n长按 OK（列表内）— 收藏 / 取消收藏</string>
+    <string name="about_text">IPTV %1$s\n\n仅保留直播功能的电视端播放器。\nM3U/M3U8 直播源 · ExoPlayer 内核\n\n遥控器：\n上下键 / 频道键 — 切换频道\nOK — 打开频道列表（播放失败时重试 / 换线）\n左键 — 切换当前频道的线路\n右键 — 打开频道列表\n菜单键 — 设置\n数字键 — 直接输入频道号\n长按 OK（列表内）— 收藏 / 取消收藏</string>
     <string name="add_source">添加直播源</string>
     <string name="edit_source">编辑直播源</string>
     <string name="source_name">名称</string>
